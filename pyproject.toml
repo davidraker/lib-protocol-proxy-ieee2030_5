@@ -1,0 +1,38 @@
+[build-system]
+requires = ["poetry-core>=2.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "protocol-proxy-ieee2030_5"
+version = "2.0.0rc0"
+description = "An IEEE 2030.5 (Smart Energy Profile 2.0 / CSIP) client Protocol Proxy."
+authors = ["The VOLTTRON Development Team <volttron@pnnl.gov>"]
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/eclipse-volttron/lib-protocol-proxy-ieee2030_5"
+homepage = "https://github.com/eclipse-volttron/lib-protocol-proxy-ieee2030_5"
+keywords = []
+packages = [ { include = "protocol_proxy", from = "src" } ]
+
+[tool.poetry.dependencies]
+python = ">=3.11,<4.0"
+protocol-proxy = ">=2.0.0rc3"
+httpx = ">=0.27"
+xsdata = ">=24.1,<26"
+cryptography = ">=42"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0"
+pytest-asyncio = ">=0.23"
+
+[tool.isort]
+profile = "black"
+
+[tool.yapf]
+based_on_style = "pep8"
+spaces_before_comment = 4
+column_limit = 120
+split_before_logical_operator = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
