@@ -65,6 +65,11 @@ def test_convert_paths_and_flatten():
     assert curve.CurveData == [sep.CurveData(xvalue=1, yvalue=2)]
     assert convert.fill_required(sep.DERCapability(), now=5) == ['modesSupported', 'rtgMaxW', 'type']
     assert convert.hex_bytes(9, 2) == b'\x00\x09' and convert.hex_bytes('', 2) == b'\x00\x00'
+    # PowerFactor is a quantity too, with displacement in place of value.
+    cap = sep.DERCapability()
+    convert.set_path(cap, ('rtgOverExcitedPF',), 0.95, multiplier=-2)
+    assert cap.rtgOverExcitedPF == sep.PowerFactor(displacement=95, multiplier=-2)
+    assert convert.flatten(cap) == {'rtgOverExcitedPF': pytest.approx(0.95)}
 
 
 def test_point_specs_and_readings():

@@ -66,8 +66,16 @@ def field_names(cls) -> frozenset:
     return frozenset(f.name for f in dataclasses.fields(cls))
 
 
+#: The scaled-number types of the schema: FixedPointType and friends carry ``value``, PowerFactor ``displacement``.
+QUANTITY_FIELDS = (frozenset({'multiplier', 'value'}), frozenset({'multiplier', 'displacement'}))
+
+
 def is_quantity(t) -> bool:
-    return is_dataclass_type(t) and field_names(t) == frozenset({'multiplier', 'value'})
+    return is_dataclass_type(t) and field_names(t) in QUANTITY_FIELDS
+
+
+def quantity_field(t) -> str:
+    return 'displacement' if 'displacement' in field_names(t) else 'value'
 
 
 def is_status_struct(t) -> bool:
@@ -116,20 +124,23 @@ def hex_text(value: bytes | None) -> str | None:
 
 
 def quantity_from(cls, value, multiplier: int = 0):
-    """A ``{value, multiplier}`` object for an engineering value, scaled by ``10**-multiplier``."""
+    """A ``{value, multiplier}`` (or ``{displacement, multiplier}``) object for an engineering value, scaled by
+    ``10**-multiplier``."""
+    name = quantity_field(cls)
     if isinstance(value, dict):
-        return cls(value=int(value.get('value', 0)), multiplier=int(value.get('multiplier', multiplier)))
+        return cls(**{name: int(value.get(name, value.get('value', 0))), 'multiplier': int(value.get('multiplier', multiplier))})
     if value is None:
         return None
-    return cls(value=int(round(float(value) / (10 ** multiplier))), multiplier=int(multiplier))
+    return cls(**{name: int(round(float(value) / (10 ** multiplier))), 'multiplier': int(multiplier)})
 
 
 def quantity_value(obj) -> float | int | None:
-    """Engineering value of a ``{value, multiplier}`` object; integers stay integers when the multiplier is >= 0."""
-    if obj is None or obj.value is None:
+    """Engineering value of a quantity object; integers stay integers when the multiplier is >= 0."""
+    raw = getattr(obj, quantity_field(type(obj)), None) if obj is not None else None
+    if raw is None:
         return None
     multiplier = obj.multiplier or 0
-    return obj.value * 10 ** multiplier if multiplier >= 0 else obj.value / 10 ** -multiplier
+    return raw * 10 ** multiplier if multiplier >= 0 else raw / 10 ** -multiplier
 
 
 def scalar_to_wire(cls, name: str, value, *, multiplier: int = 0, now: int | None = None):
