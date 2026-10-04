@@ -1,5 +1,6 @@
 """Every endpoint through the real IPC base class, with the proxy constructed but never registered."""
 import json
+from unittest import mock
 from uuid import uuid4
 
 import protocol_proxy.protocol.ieee2030_5 as package
@@ -53,14 +54,17 @@ async def test_register_read_write_close(server, clock, monkeypatch):
     monkeypatch.setattr(client_module.ServerClient, '__init__', patched)
     pushed = []
 
-    async def push(values):
-        pushed.append(values)
+    async def push(client, values):
+        pushed.append((client.remote_id, values))
     monkeypatch.setattr(proxy, '_push', push)           # no manager process in a unit test
 
+    remote = uuid4()
     reply = await call(proxy, proxy.register_server_endpoint, {**IDENTITY, 'pin': PIN, 'subscribe': False,
-                                                               'poll_rate_floor': 1, 'points': POINTS, 'wait': 5})
+                                                               'poll_rate_floor': 1, 'points': POINTS, 'wait': 5,
+                                                               'remote_id': remote.hex})
     key = f'{IDENTITY["server_url"]}|{LFDI}'
     assert reply['error'] == {}
+    assert proxy.clients[key].remote_id == remote
     assert reply['result'] == {'client': key, 'points': len(POINTS), 'lfdi': LFDI, 'sfdi': proxy.clients[key].session.sfdi,
                                'ready': True, 'start_error': None}
     now = proxy.clients[key].session.now()
@@ -74,7 +78,7 @@ async def test_register_read_write_close(server, clock, monkeypatch):
     assert reply == {'result': {'der/DERSettings/setMaxW': {'status': 204, 'resource': 'DERSettings', 'value': 5000}}, 'error': {}}
     assert server.puts['/edev/1/der/1/derg'].setMaxW.value == 5000
 
-    assert pushed and pushed[-1]['der/DERControl/opModMaxLimW'] == 1234      # the refresh pushed RECEIVE_CONTROLS
+    assert pushed and pushed[-1] == (remote, mock.ANY) and pushed[-1][1]['der/DERControl/opModMaxLimW'] == 1234   # tagged push
     reply = await call(proxy, proxy.describe_server_endpoint, IDENTITY)
     assert reply['result']['end_device'] == '/edev/1' and reply['result']['points'] == len(POINTS)
 
@@ -97,3 +101,13 @@ async def test_bad_registrations():
     assert 'no attribute' in reply['error']['server'] and proxy.clients == {}
     reply = await proxy.read_resources_endpoint.__wrapped__(proxy, None, b'not json')
     assert json.loads(reply)['error'] == {'server': 'Server not registered.'}
+
+
+async def test_push_message_carries_the_remote_id():
+    proxy = make_proxy()
+    proxy.send = mock.AsyncMock(return_value=True)
+    remote = uuid4()
+    await proxy._push(mock.Mock(remote_id=remote), {'t': 1})
+    peer, message = proxy.send.await_args.args
+    assert peer is proxy.peers[proxy.manager] and message.method_name == 'RECEIVE_CONTROLS' and message.remote_id == remote
+    assert json.loads(message.payload) == {'result': {'t': 1}, 'error': {}}

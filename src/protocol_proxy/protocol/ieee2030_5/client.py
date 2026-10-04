@@ -42,7 +42,7 @@ class ServerClient:
                  notify_client_auth: bool = False, notify_cert_path: str | None = None, notify_key_path: str | None = None,
                  response_timeout: float = 10.0, description: str = 'VOLTTRON',
                  push: PushCallback | None = None, transport: httpx.AsyncBaseTransport | None = None,
-                 clock: Callable[[], float] = time.time, retries: int = 3):
+                 clock: Callable[[], float] = time.time, retries: int = 3, remote_id=None):
         if lfdi:
             self.lfdi = normalize_lfdi(lfdi)
         elif cert_path:
@@ -58,6 +58,8 @@ class ServerClient:
         # strict verifier (Go's x509) reject it as a server certificate; the device certificate otherwise.
         self.notify_cert_path, self.notify_key_path = notify_cert_path or cert_path, notify_key_path or key_path
         self.push = push
+        # The caller's identifier for this server, carried in pushed messages so the manager routes them to it.
+        self.remote_id = remote_id
         if isinstance(device_category, str):
             device_category = int(device_category, 16) if device_category.lower().startswith('0x') else int(device_category)
         from .transport import DEFAULT_CIPHERS

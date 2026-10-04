@@ -7,7 +7,9 @@ the manager as RECEIVE_CONTROLS, keyed the same way.
 import asyncio
 import json
 import logging
+from functools import partial
 from typing import Any
+from uuid import UUID
 
 from protocol_proxy.ipc import callback, ProtocolProxyMessage
 from protocol_proxy.proxy.asyncio import AsyncioProtocolProxy
@@ -57,12 +59,23 @@ class Ieee2030_5Proxy(AsyncioProtocolProxy):
             return None
         return message if isinstance(message, dict) else None
 
-    async def _push(self, values: dict[str, Any]):
-        """Send changed control values to the manager, fire-and-forget, keyed by the registered topics."""
+    async def _push(self, client: ServerClient, values: dict[str, Any]):
+        """Send changed control values to the manager, fire-and-forget, keyed by the registered topics and tagged with
+        the server's remote id so the manager routes them to the caller that registered it."""
         peer = self.peers.get(self.manager)
         if peer is None:    # pragma: no cover - the manager peer is created by the base constructor
             return
-        await self.send(peer, ProtocolProxyMessage(method_name='RECEIVE_CONTROLS', payload=serialize(values)))
+        await self.send(peer, ProtocolProxyMessage(method_name='RECEIVE_CONTROLS', payload=serialize(values),
+                                                   remote_id=client.remote_id))
+
+    @staticmethod
+    def _remote_id(message: dict) -> UUID | None:
+        value = message.get('remote_id')
+        try:
+            return UUID(str(value)) if value else None
+        except ValueError:
+            _log.warning(f'Ignoring malformed remote_id {value!r}')
+            return None
 
     # ---- endpoints ----------------------------------------------------------------------------------------------
     @callback
@@ -83,7 +96,9 @@ class Ieee2030_5Proxy(AsyncioProtocolProxy):
             fresh = client is None
             if fresh:
                 settings = {k: message[k] for k in SERVER_FIELDS if k in message and k != 'server_url'}
-                client = ServerClient(message['server_url'], push=self._push, **settings)
+                client = ServerClient(message['server_url'], **settings)
+                client.push = partial(self._push, client)
+            client.remote_id = self._remote_id(message)
             count = client.configure_points(message.get('points') or [])
             self.clients[key] = client
             if fresh:
