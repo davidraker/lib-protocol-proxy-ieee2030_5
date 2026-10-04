@@ -92,6 +92,35 @@ Whenever the view of the controls changes, by poll, notification or a scheduled 
 topics to the manager as `RECEIVE_CONTROLS` with the payload `{"result": {topic: value, ...}, "error": {}}`, scaled
 like a read. Only registered topics are forwarded.
 
+## Server role
+
+A registration whose `role` is `server` makes the proxy *serve* a CSIP server to DER clients instead of reaching one: an
+HTTPS server on `bind_host:port` (the server certificate in `cert_path`/`key_path`, client certificates verified against
+`ca_path` when `client_auth` is on; `tls: false` serves plain HTTP for testing) with the resource tree a client expects.
+`/dcap` links Time, the EndDeviceList, one DERProgramList and the MirrorUsagePointList; `/derp/1` is the program (its
+`primacy` from the registration) with `/derp/1/dderc` (DefaultDERControl), `/derp/1/derc` (DERControlList) and
+`/derp/1/dc` (DERCurveList); each DER client gets an EndDevice with Registration (PIN), FunctionSetAssignments, a DER
+with the four upward links, DeviceInformation and a SubscriptionList. `client_lfdi`/`client_pin` pre-register the DER
+whose data maps to the registered points (otherwise the first client to register is that DER);
+`register_unknown_clients` lets other clients create EndDevices.
+
+The point rows are the same convention paths with the directions mirrored. The platform writes the controls:
+`DefaultDERControl.*`; `DERControl.*`, which creates one *immediate* event per write request (start now, duration
+`immediate_control_duration`, status active) superseding the previous one; `DERControlList`, the schedule, written as a
+list of `{mRID?, interval: {start, duration}, DERControl: {...}}` entries (events that disappear are cancelled, finished
+events are dropped later); `DERCurve.<attribute>.*` (a DERCurve per curve attribute, linked from controls that set that
+attribute to true or to its href); and `DERProgram.*`. The DER client's PUTs of DERStatus, DERSettings, DERCapability,
+DERAvailability and DeviceInformation, its MirrorMeterReadings (matched by mRID, else by unit and phase) and its
+DERControlResponses are flattened into the convention and pushed to the caller as `RECEIVE_CONTROLS`, scaled per row.
+`READ_RESOURCES` reports what the server holds for either kind of row; `DERControlList` reads back as the events with
+their status and the responses received. Clients subscribed to the control resources are notified (`POST` of a
+`Notification` to their URI) whenever a platform write changes them.
+
+The served state (registrations, PINs, subscriptions, controls, curves, received values, responses) is written to
+`<state_dir>/sep2_server_<host>_<port>.json` on every change and restored when the proxy starts again, so a proxy
+restart leaves clients registered and subscribed. Registration `values` (the caller's current values) seed served
+points that hold nothing when there is no state to restore.
+
 ## Subscriptions and notifications
 
 With `subscribe` true and a `notify_host` the proxy listens for notifications on `notify_bind_host:notify_port` (TLS

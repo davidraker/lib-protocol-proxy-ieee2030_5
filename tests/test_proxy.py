@@ -101,7 +101,7 @@ async def test_register_read_write_close(server, clock, monkeypatch):
 
 async def test_bad_registrations():
     proxy = make_proxy()
-    assert (await call(proxy, proxy.register_server_endpoint, {}))['error'] == {'server': 'REGISTER_SERVER needs at least a server_url.'}
+    assert (await call(proxy, proxy.register_server_endpoint, {}))['error'] == {'server': 'Registering a server to reach needs at least a server_url.'}
     reply = await call(proxy, proxy.register_server_endpoint, {**IDENTITY}, remote=None)
     assert 'remote id' in reply['error']['server']
     reply = await call(proxy, proxy.register_server_endpoint, {'server_url': 'https://x'})

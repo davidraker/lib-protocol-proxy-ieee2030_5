@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "protocol-proxy-ieee2030_5"
-version = "2.0.0rc0"
+version = "2.0.0rc1"
 description = "An IEEE 2030.5 (Smart Energy Profile 2.0 / CSIP) client Protocol Proxy."
 authors = ["The VOLTTRON Development Team <volttron@pnnl.gov>"]
 license = "Apache-2.0"

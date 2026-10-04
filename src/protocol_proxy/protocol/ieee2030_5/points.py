@@ -93,14 +93,23 @@ class PointSpec:
         return '.'.join(self.path)
 
     @classmethod
-    def from_dict(cls, spec: dict, lfdi: str) -> 'PointSpec':
+    def from_dict(cls, spec: dict, lfdi: str, served: bool = False) -> 'PointSpec':
+        """``served``: the point belongs to a server this proxy serves, so the directions are the client's mirrored:
+        the platform writes the controls (downward resources) and the DER client writes the upward ones."""
         path = parse_path(spec['path'])
-        writable = bool(spec.get('writable', path[0] in convert.UPWARD_RESOURCES))
         resource = path[0]
-        if writable and resource not in convert.UPWARD_RESOURCES:
-            raise ValueError(f'{spec.get("topic")}: {resource} is received from the server and cannot be written')
-        if not writable and resource not in convert.DOWNWARD_RESOURCES:
-            raise ValueError(f'{spec.get("topic")}: {resource} is sent to the server; mark the row writable')
+        if served:
+            writable = bool(spec.get('writable', resource in convert.DOWNWARD_RESOURCES))
+            if writable and resource not in convert.DOWNWARD_RESOURCES:
+                raise ValueError(f'{spec.get("topic")}: {resource} is reported by the DER client and cannot be written here')
+            if resource not in convert.UPWARD_RESOURCES and resource not in convert.DOWNWARD_RESOURCES:
+                raise ValueError(f'{spec.get("topic")}: {resource} is not a 2030.5 resource this proxy serves')
+        else:
+            writable = bool(spec.get('writable', resource in convert.UPWARD_RESOURCES))
+            if writable and resource not in convert.UPWARD_RESOURCES:
+                raise ValueError(f'{spec.get("topic")}: {resource} is received from the server and cannot be written')
+            if not writable and resource not in convert.DOWNWARD_RESOURCES:
+                raise ValueError(f'{spec.get("topic")}: {resource} is sent to the server; mark the row writable')
         reading = None
         if resource == 'MirrorMeterReading':
             if len(path) < 2:
