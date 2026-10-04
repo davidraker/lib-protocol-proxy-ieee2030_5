@@ -31,8 +31,7 @@ python -m protocol_proxy.proxy protocol_proxy.protocol.ieee2030_5.ieee2030_5_pro
 
 The proxy takes no protocol-specific launch options. Everything about a server arrives in messages, and every point is
 identified by the topic the caller registered it under. The caller's remote id (protocol-proxy header version 2)
-identifies the server in every message after `REGISTER_SERVER`; a version 1 caller names it with `server_url` and
-`lfdi` or `cert_path` in the payload instead:
+identifies the server in every message after `REGISTER_SERVER`:
 
 | Message | Purpose |
 |---|---|

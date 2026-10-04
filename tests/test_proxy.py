@@ -18,8 +18,11 @@ def make_proxy() -> Ieee2030_5Proxy:
                            manager_token=uuid4(), registration_retry_delay=0, registration_timeout=0.05)
 
 
-async def call(proxy, endpoint, message: dict, remote=None) -> dict:
-    """``remote`` is the header's remote id (version 2); None is a version 1 caller naming the server in the payload."""
+REMOTE = uuid4()      # the caller's remote id, carried in every header
+
+
+async def call(proxy, endpoint, message: dict, remote=REMOTE) -> dict:
+    """``remote`` is the header's remote id, which is how the proxy knows which server a request concerns."""
     reply = await endpoint.__wrapped__(proxy, SimpleNamespace(remote_id=remote), json.dumps(message).encode('utf8'))
     return json.loads(reply)
 
@@ -86,9 +89,9 @@ async def test_register_read_write_close(server, clock, monkeypatch):
     # Re-registering replaces the point table and restarts the session.
     reply = await call(proxy, proxy.register_server_endpoint, {**IDENTITY, 'points': POINTS[:2], 'wait': 5}, remote=remote)
     assert reply['result']['points'] == 2 and reply['result']['ready'] is True
-    # A version 1 caller still finds the server through the payload identity.
-    reply = await call(proxy, proxy.read_resources_endpoint, {**IDENTITY, 'topics': ['der/DERSettings/setMaxW']})
-    assert reply['result'] == {'der/DERSettings/setMaxW': 5000}
+    # Payload identity fields are not a substitute for the header: an unregistered remote gets nothing.
+    reply = await call(proxy, proxy.read_resources_endpoint, {**IDENTITY, 'topics': ['der/DERSettings/setMaxW']}, remote=uuid4())
+    assert reply['error'] == {'server': 'Server not registered.'}
 
     reply = await call(proxy, proxy.close_server_endpoint, {}, remote=remote)
     assert reply == {'result': {'closed': True}, 'error': {}} and proxy.clients == {} and proxy.remotes == {}
@@ -99,6 +102,8 @@ async def test_register_read_write_close(server, clock, monkeypatch):
 async def test_bad_registrations():
     proxy = make_proxy()
     assert (await call(proxy, proxy.register_server_endpoint, {}))['error'] == {'server': 'REGISTER_SERVER needs at least a server_url.'}
+    reply = await call(proxy, proxy.register_server_endpoint, {**IDENTITY}, remote=None)
+    assert 'remote id' in reply['error']['server']
     reply = await call(proxy, proxy.register_server_endpoint, {'server_url': 'https://x'})
     assert 'LFDI or a client certificate' in reply['error']['server']
     reply = await call(proxy, proxy.register_server_endpoint, {**IDENTITY, 'points': [{'topic': 't', 'path': 'DERSettings.nope', 'writable': True}]})

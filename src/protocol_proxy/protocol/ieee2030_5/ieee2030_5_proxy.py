@@ -1,8 +1,8 @@
 """The IEEE 2030.5 protocol proxy: a process acting as the 2030.5 client (EndDevice) towards any number of servers.
 
 Everything about a server arrives in REGISTER_SERVER, so the proxy takes no launch options. The registering caller's
-remote id (header version 2) identifies the server in every later message; callers without one (header version 1)
-name it with ``server_url`` and ``lfdi``/``cert_path`` in the payload instead. Reads and writes are keyed by the full
+remote id (header version 2) identifies the server in every later message; the caller and the proxy are always
+installed together, so there is no payload fallback. Reads and writes are keyed by the full
 point topics the caller registered; control changes (polled, notified or scheduled) are pushed to the manager as
 RECEIVE_CONTROLS, tagged with the remote id and keyed the same way.
 """
@@ -48,13 +48,11 @@ class Ieee2030_5Proxy(AsyncioProtocolProxy):
         return f"{message.get('server_url')}|{message.get('lfdi') or message.get('cert_path')}"
 
     def _get_client(self, headers, message: dict, action: str) -> ServerClient | None:
-        """The server a request concerns: the header's remote id first, the payload's identity fields otherwise."""
+        """The server a request concerns, by the remote id in its header."""
         remote_id = getattr(headers, 'remote_id', None)
         client = self.remotes.get(remote_id) if remote_id else None
-        if client is None and message.get('server_url'):
-            client = self.clients.get(self.client_key(message))
         if client is None:
-            _log.warning(f'Failed to {action}: server {remote_id or self.client_key(message)} is not registered.')
+            _log.warning(f'Failed to {action}: remote {remote_id} has no registered server.')
         return client
 
     @staticmethod
@@ -76,16 +74,9 @@ class Ieee2030_5Proxy(AsyncioProtocolProxy):
                                                    remote_id=client.remote_id))
 
     @staticmethod
-    def _remote_id(headers, message: dict) -> UUID | None:
-        """The caller's id for the server: from the header, or from the payload for a version 1 caller."""
-        if (remote_id := getattr(headers, 'remote_id', None)) is not None:
-            return remote_id
-        value = message.get('remote_id')
-        try:
-            return UUID(str(value)) if value else None
-        except ValueError:
-            _log.warning(f'Ignoring malformed remote_id {value!r}')
-            return None
+    def _remote_id(headers) -> UUID | None:
+        """The caller's id for the server, from the header."""
+        return getattr(headers, 'remote_id', None)
 
     # ---- endpoints ----------------------------------------------------------------------------------------------
     @callback
@@ -100,6 +91,9 @@ class Ieee2030_5Proxy(AsyncioProtocolProxy):
         message = self._decode(raw_message)
         if message is None or not message.get('server_url'):
             return serialize({}, {'server': 'REGISTER_SERVER needs at least a server_url.'})
+        remote_id = self._remote_id(headers)
+        if remote_id is None:
+            return serialize({}, {'server': 'REGISTER_SERVER needs the remote id in its header (version 2).'})
         key = self.client_key(message)
         try:
             client = self.clients.get(key)
@@ -108,11 +102,10 @@ class Ieee2030_5Proxy(AsyncioProtocolProxy):
                 settings = {k: message[k] for k in SERVER_FIELDS if k in message and k != 'server_url'}
                 client = ServerClient(message['server_url'], **settings)
                 client.push = partial(self._push, client)
-            client.remote_id = self._remote_id(headers, message)
+            client.remote_id = remote_id
             count = client.configure_points(message.get('points') or [])
             self.clients[key] = client
-            if client.remote_id is not None:
-                self.remotes[client.remote_id] = client
+            self.remotes[remote_id] = client
             if fresh:
                 client.start()
             else:
