@@ -1,8 +1,10 @@
 """The IEEE 2030.5 protocol proxy: a process acting as the 2030.5 client (EndDevice) towards any number of servers.
 
-Everything about a server arrives in REGISTER_SERVER, so the proxy takes no launch options. Reads and writes are
-keyed by the full point topics the caller registered; control changes (polled, notified or scheduled) are pushed to
-the manager as RECEIVE_CONTROLS, keyed the same way.
+Everything about a server arrives in REGISTER_SERVER, so the proxy takes no launch options. The registering caller's
+remote id (header version 2) identifies the server in every later message; callers without one (header version 1)
+name it with ``server_url`` and ``lfdi``/``cert_path`` in the payload instead. Reads and writes are keyed by the full
+point topics the caller registered; control changes (polled, notified or scheduled) are pushed to the manager as
+RECEIVE_CONTROLS, tagged with the remote id and keyed the same way.
 """
 import asyncio
 import json
@@ -28,6 +30,7 @@ class Ieee2030_5Proxy(AsyncioProtocolProxy):
     def __init__(self, callback_timeout: float = DEFAULT_CALLBACK_TIMEOUT, **kwargs):
         super(Ieee2030_5Proxy, self).__init__(**kwargs)
         self.clients: dict[str, ServerClient] = {}
+        self.remotes: dict[UUID, ServerClient] = {}          # by the caller's remote id (header version 2)
         self.loop = asyncio.get_event_loop()
         self.register_callback(self.register_server_endpoint, 'REGISTER_SERVER', provides_response=True,
                                timeout=callback_timeout)
@@ -44,10 +47,14 @@ class Ieee2030_5Proxy(AsyncioProtocolProxy):
     def client_key(message: dict) -> str:
         return f"{message.get('server_url')}|{message.get('lfdi') or message.get('cert_path')}"
 
-    def _get_client(self, message: dict, action: str) -> ServerClient | None:
-        client = self.clients.get(self.client_key(message))
+    def _get_client(self, headers, message: dict, action: str) -> ServerClient | None:
+        """The server a request concerns: the header's remote id first, the payload's identity fields otherwise."""
+        remote_id = getattr(headers, 'remote_id', None)
+        client = self.remotes.get(remote_id) if remote_id else None
+        if client is None and message.get('server_url'):
+            client = self.clients.get(self.client_key(message))
         if client is None:
-            _log.warning(f'Failed to {action}: server {self.client_key(message)} is not registered.')
+            _log.warning(f'Failed to {action}: server {remote_id or self.client_key(message)} is not registered.')
         return client
 
     @staticmethod
@@ -69,7 +76,10 @@ class Ieee2030_5Proxy(AsyncioProtocolProxy):
                                                    remote_id=client.remote_id))
 
     @staticmethod
-    def _remote_id(message: dict) -> UUID | None:
+    def _remote_id(headers, message: dict) -> UUID | None:
+        """The caller's id for the server: from the header, or from the payload for a version 1 caller."""
+        if (remote_id := getattr(headers, 'remote_id', None)) is not None:
+            return remote_id
         value = message.get('remote_id')
         try:
             return UUID(str(value)) if value else None
@@ -79,7 +89,7 @@ class Ieee2030_5Proxy(AsyncioProtocolProxy):
 
     # ---- endpoints ----------------------------------------------------------------------------------------------
     @callback
-    async def register_server_endpoint(self, _, raw_message: bytes):
+    async def register_server_endpoint(self, headers, raw_message: bytes):
         """Create or re-register the client for a server and replace its point table.
 
         Payload: the server fields (``server_url``, ``cert_path``, ``key_path``, ``ca_path``, ``lfdi``, ``pin``,
@@ -98,9 +108,11 @@ class Ieee2030_5Proxy(AsyncioProtocolProxy):
                 settings = {k: message[k] for k in SERVER_FIELDS if k in message and k != 'server_url'}
                 client = ServerClient(message['server_url'], **settings)
                 client.push = partial(self._push, client)
-            client.remote_id = self._remote_id(message)
+            client.remote_id = self._remote_id(headers, message)
             count = client.configure_points(message.get('points') or [])
             self.clients[key] = client
+            if client.remote_id is not None:
+                self.remotes[client.remote_id] = client
             if fresh:
                 client.start()
             else:
@@ -115,38 +127,40 @@ class Ieee2030_5Proxy(AsyncioProtocolProxy):
             return serialize({}, {'server': str(e)})
 
     @callback
-    async def read_resources_endpoint(self, _, raw_message: bytes):
+    async def read_resources_endpoint(self, headers, raw_message: bytes):
         """Reply with the values of ``topics`` (controls from the engine's view, upward rows from the shadows).
         ``refresh`` fetches the controls first."""
         message = self._decode(raw_message)
-        if message is None or (client := self._get_client(message, 'read resources')) is None:
+        if message is None or (client := self._get_client(headers, message, 'read resources')) is None:
             return serialize({}, {'server': 'Server not registered.'})
         results, errors = await client.read(message.get('topics'), refresh=bool(message.get('refresh')))
         return serialize(results, errors)
 
     @callback
-    async def write_resources_endpoint(self, _, raw_message: bytes):
+    async def write_resources_endpoint(self, headers, raw_message: bytes):
         """PUT or POST the upward resources touched by ``values`` (``{topic: value}``)."""
         message = self._decode(raw_message)
-        if message is None or (client := self._get_client(message, 'write resources')) is None:
+        if message is None or (client := self._get_client(headers, message, 'write resources')) is None:
             return serialize({}, {'server': 'Server not registered.'})
         results, errors = await client.write(message.get('values') or {})
         return serialize(results, errors)
 
     @callback
-    async def describe_server_endpoint(self, _, raw_message: bytes):
+    async def describe_server_endpoint(self, headers, raw_message: bytes):
         message = self._decode(raw_message)
-        if message is None or (client := self._get_client(message, 'describe server')) is None:
+        if message is None or (client := self._get_client(headers, message, 'describe server')) is None:
             return serialize({}, {'server': 'Server not registered.'})
         return serialize(client.describe())
 
     @callback
-    async def close_server_endpoint(self, _, raw_message: bytes):
+    async def close_server_endpoint(self, headers, raw_message: bytes):
         message = self._decode(raw_message)
         if message is None:
             return serialize({}, {'server': 'Undecodable request.'})
-        client = self.clients.pop(self.client_key(message), None)
+        client = self._get_client(headers, message, 'close server')
         if client is not None:
+            self.clients = {k: c for k, c in self.clients.items() if c is not client}
+            self.remotes = {k: c for k, c in self.remotes.items() if c is not client}
             await client.close()
         return serialize({'closed': client is not None})
 

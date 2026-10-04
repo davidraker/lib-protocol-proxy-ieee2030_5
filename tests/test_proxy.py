@@ -1,5 +1,6 @@
 """Every endpoint through the real IPC base class, with the proxy constructed but never registered."""
 import json
+from types import SimpleNamespace
 from unittest import mock
 from uuid import uuid4
 
@@ -17,8 +18,9 @@ def make_proxy() -> Ieee2030_5Proxy:
                            manager_token=uuid4(), registration_retry_delay=0, registration_timeout=0.05)
 
 
-async def call(proxy, endpoint, message: dict) -> dict:
-    reply = await endpoint.__wrapped__(proxy, None, json.dumps(message).encode('utf8'))
+async def call(proxy, endpoint, message: dict, remote=None) -> dict:
+    """``remote`` is the header's remote id (version 2); None is a version 1 caller naming the server in the payload."""
+    reply = await endpoint.__wrapped__(proxy, SimpleNamespace(remote_id=remote), json.dumps(message).encode('utf8'))
     return json.loads(reply)
 
 
@@ -60,35 +62,37 @@ async def test_register_read_write_close(server, clock, monkeypatch):
 
     remote = uuid4()
     reply = await call(proxy, proxy.register_server_endpoint, {**IDENTITY, 'pin': PIN, 'subscribe': False,
-                                                               'poll_rate_floor': 1, 'points': POINTS, 'wait': 5,
-                                                               'remote_id': remote.hex})
+                                                               'poll_rate_floor': 1, 'points': POINTS, 'wait': 5}, remote=remote)
     key = f'{IDENTITY["server_url"]}|{LFDI}'
     assert reply['error'] == {}
-    assert proxy.clients[key].remote_id == remote
+    assert proxy.clients[key].remote_id == remote and proxy.remotes[remote] is proxy.clients[key]
     assert reply['result'] == {'client': key, 'points': len(POINTS), 'lfdi': LFDI, 'sfdi': proxy.clients[key].session.sfdi,
                                'ready': True, 'start_error': None}
     now = proxy.clients[key].session.now()
     server.add_control('/derp/1', now - 1, 600, {'opModMaxLimW': 1234}, status=1)
-    reply = await call(proxy, proxy.read_resources_endpoint, {**IDENTITY, 'refresh': True,
-                                                              'topics': ['der/DERControl/opModMaxLimW', 'der/DERControlList', 'bogus']})
+    reply = await call(proxy, proxy.read_resources_endpoint, {'refresh': True,                      # header names the server
+                                                              'topics': ['der/DERControl/opModMaxLimW', 'der/DERControlList', 'bogus']}, remote=remote)
     assert reply["result"]["der/DERControl/opModMaxLimW"] == 1234 and len(reply['result']['der/DERControlList']) == 1
     assert reply['error'] == {'bogus': 'unregistered topic'}
 
-    reply = await call(proxy, proxy.write_resources_endpoint, {**IDENTITY, 'values': {'der/DERSettings/setMaxW': 5000}})
+    reply = await call(proxy, proxy.write_resources_endpoint, {'values': {'der/DERSettings/setMaxW': 5000}}, remote=remote)
     assert reply == {'result': {'der/DERSettings/setMaxW': {'status': 204, 'resource': 'DERSettings', 'value': 5000}}, 'error': {}}
     assert server.puts['/edev/1/der/1/derg'].setMaxW.value == 5000
 
     assert pushed and pushed[-1] == (remote, mock.ANY) and pushed[-1][1]['der/DERControl/opModMaxLimW'] == 1234   # tagged push
-    reply = await call(proxy, proxy.describe_server_endpoint, IDENTITY)
+    reply = await call(proxy, proxy.describe_server_endpoint, {}, remote=remote)
     assert reply['result']['end_device'] == '/edev/1' and reply['result']['points'] == len(POINTS)
 
     # Re-registering replaces the point table and restarts the session.
-    reply = await call(proxy, proxy.register_server_endpoint, {**IDENTITY, 'points': POINTS[:2], 'wait': 5})
+    reply = await call(proxy, proxy.register_server_endpoint, {**IDENTITY, 'points': POINTS[:2], 'wait': 5}, remote=remote)
     assert reply['result']['points'] == 2 and reply['result']['ready'] is True
+    # A version 1 caller still finds the server through the payload identity.
+    reply = await call(proxy, proxy.read_resources_endpoint, {**IDENTITY, 'topics': ['der/DERSettings/setMaxW']})
+    assert reply['result'] == {'der/DERSettings/setMaxW': 5000}
 
-    reply = await call(proxy, proxy.close_server_endpoint, IDENTITY)
-    assert reply == {'result': {'closed': True}, 'error': {}} and proxy.clients == {}
-    reply = await call(proxy, proxy.read_resources_endpoint, {**IDENTITY, 'topics': ['x']})
+    reply = await call(proxy, proxy.close_server_endpoint, {}, remote=remote)
+    assert reply == {'result': {'closed': True}, 'error': {}} and proxy.clients == {} and proxy.remotes == {}
+    reply = await call(proxy, proxy.read_resources_endpoint, {'topics': ['x']}, remote=remote)
     assert reply['error'] == {'server': 'Server not registered.'}
 
 
