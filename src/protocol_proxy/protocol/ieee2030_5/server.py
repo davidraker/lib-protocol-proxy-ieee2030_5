@@ -331,6 +331,10 @@ class ServedSep2Server:
             self._schedule_save()
             return 201, None, {'Location': obj.href}
         if path.startswith('/mup/') and isinstance(obj, sep.MirrorMeterReading):
+            # IEEE 2030.5 POSTs a MirrorMeterReading to the MirrorUsagePoint itself; the GridAPPS-D Go client (and
+            # its server's layout) use a /mr collection beneath it. Both are accepted.
+            if path.endswith('/mr'):
+                path = path[:-len('/mr')]
             mup = self.resources.get(path)
             if mup is None:
                 return 404, None, {}
@@ -610,7 +614,10 @@ class ServedSep2Server:
         self._add_control(control)
         self.immediate_href = control.href
         if previous is not None:
+            # The replaced immediate control leaves the list at once (its resource stays for the client's responses):
+            # a client that arbitrates between listed events by list order must not pick the superseded one.
             self._end_control(previous, SUPERSEDED)
+            self.lists[DERC][1][:] = [c for c in self.lists[DERC][1] if c.href != previous.href]
 
     def _add_control(self, control: sep.DERControl):
         self.counters['derc'] += 1

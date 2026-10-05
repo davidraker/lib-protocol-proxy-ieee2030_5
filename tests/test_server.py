@@ -178,10 +178,12 @@ async def test_immediate_control_is_an_active_event_and_the_client_responds(serv
     assert await wait_for(lambda: sorted(r['status'] for r in served.responses.get(entry['mRID'], [])) == [1, 2])
     pushed_list = served.pushes.latest('s/DERControlList')
     assert pushed_list is None                                      # DERControlList is platform-written: reflected, not pushed
-    # A second immediate control supersedes the first.
+    # A second immediate control supersedes the first, which leaves the list (its resource stays, marked superseded).
+    first_href = served.immediate_href
     await served.write({'s/DERControl/opModMaxLimW': 30})
     statuses = {e['mRID']: e['status'] for e in served._schedule_view()}
-    assert list(statuses.values()).count('active') == 1 and 'superseded' in statuses.values()
+    assert list(statuses.values()) == ['active'] and served.immediate_href != first_href
+    assert served.resources[first_href].EventStatus.currentStatus == 4
 
 
 async def test_schedule_creates_cancels_and_completes_events(served):
@@ -333,3 +335,37 @@ async def test_proxy_serves_and_closes_a_server(tmp_path):
     assert 'cert_path' in reply['error']['server'] and len(proxy.servers) == 1              # TLS without a certificate
     reply = await call(proxy, proxy.close_server_endpoint, {}, remote=remote)
     assert reply['result'] == {'closed': True} and proxy.servers == {} and proxy.remotes == {}
+
+
+async def test_readings_posted_to_the_mup_or_its_mr_collection_are_received(served):
+    """IEEE 2030.5 POSTs a MirrorMeterReading to the MirrorUsagePoint; the GridAPPS-D Go client posts to <mup>/mr. The
+    served server takes both and attributes the reading by its ReadingType's uom."""
+    from protocol_proxy.protocol.ieee2030_5.models.xml import to_xml
+    mup = sep.MirrorUsagePoint(mRID=bytes.fromhex('AA' * 16), deviceLFDI=bytes.fromhex(LFDI), serviceCategoryKind=0, status=1,
+                               roleFlags=bytes(2))
+    status, _, extra = await served.handle('POST', '/mup', {}, {}, to_xml(mup))
+    assert status == 201 and extra['Location'] == '/mup/1'
+    reading = sep.MirrorMeterReading(mRID=bytes.fromhex('BB' * 16), ReadingType=sep.ReadingType(uom=38), Reading=sep.Reading(value=1500))
+    status, _, extra = await served.handle('POST', '/mup/1/mr', {}, {}, to_xml(reading))
+    assert status == 201 and extra['Location'].startswith('/mup/1/mr/')
+    assert await wait_for(lambda: served.pushes.latest('s/MirrorMeterReading/W') == 1500)
+    reading = sep.MirrorMeterReading(mRID=bytes.fromhex('BB' * 16), ReadingType=sep.ReadingType(uom=38), Reading=sep.Reading(value=1600))
+    status, _, _ = await served.handle('POST', '/mup/1', {}, {}, to_xml(reading))
+    assert status == 201 and await wait_for(lambda: served.pushes.latest('s/MirrorMeterReading/W') == 1600)
+    status, _, _ = await served.handle('POST', '/mup/9/mr', {}, {}, to_xml(reading))
+    assert status == 404
+
+
+async def test_a_new_immediate_control_replaces_the_previous_one_in_the_list(served):
+    """Each platform write of an immediate control supersedes the last; the list shows only the one in force (a client
+    choosing among listed events must not land on the superseded one), while its resource remains fetchable."""
+    from protocol_proxy.protocol.ieee2030_5.models.xml import from_xml
+    await served.write({'s/DERControl/opModMaxLimW': 50})
+    first = served.immediate_href
+    await served.write({'s/DERControl/opModMaxLimW': 40})
+    status, body, _ = await served.handle('GET', '/derp/1/derc', {}, {}, b'')
+    listed = from_xml(body, sep.DERControlList)
+    assert status == 200 and [c.href for c in listed.DERControl] == [served.immediate_href] and served.immediate_href != first
+    assert listed.DERControl[0].DERControlBase.opModMaxLimW == 40 and listed.DERControl[0].EventStatus.currentStatus == 1
+    status, body, _ = await served.handle('GET', first, {}, {}, b'')
+    assert status == 200 and from_xml(body, sep.DERControl).EventStatus.currentStatus == 4        # superseded, still readable
