@@ -209,6 +209,18 @@ class Ieee2030_5Proxy(AsyncioProtocolProxy):
             await client.close()
         return serialize({'closed': client is not None})
 
+    async def stop(self):
+        """Close every served server and client session before the IPC server. Closing a served server writes its
+        state file at once, so a SIGTERM from the manager (or a lost manager) does not lose the debounced save."""
+        remotes = list(dict.fromkeys([*self.servers.values(), *self.clients.values()]))
+        self.servers, self.clients, self.remotes = {}, {}, {}
+        for remote in remotes:
+            try:
+                await remote.close()
+            except Exception as e:
+                _log.warning(f'{self.proxy_name}: error closing {type(remote).__name__} while stopping: {e}')
+        await super(Ieee2030_5Proxy, self).stop()
+
     @classmethod
     def get_unique_remote_id(cls, unique_remote_id: tuple) -> tuple:
         """Identify the proxy process a caller wants; all servers share one unless the caller groups them."""

@@ -1,4 +1,5 @@
 """Every endpoint through the real IPC base class, with the proxy constructed but never registered."""
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest import mock
@@ -120,3 +121,23 @@ async def test_push_message_carries_the_remote_id():
     peer, message = proxy.send.await_args.args
     assert peer is proxy.peers[proxy.manager] and message.method_name == 'RECEIVE_CONTROLS' and message.remote_id == remote
     assert json.loads(message.payload) == {'result': {'t': 1}, 'error': {}}
+
+
+def test_stop_closes_served_servers_and_clients_before_the_ipc_server():
+    """A SIGTERM from the manager reaches stop(); every session is closed (a served server writes its state file)."""
+    async def main():
+        proxy = make_proxy()
+        closed = []
+
+        class Remote:
+            def __init__(self, name):
+                self.name = name
+
+            async def close(self):
+                closed.append(self.name)
+        served, client = Remote('served'), Remote('client')
+        proxy.servers['s'], proxy.clients['c'], proxy.remotes[uuid4()] = served, client, served
+        await proxy.stop()
+        assert closed == ['served', 'client']
+        assert not proxy.servers and not proxy.clients and not proxy.remotes and proxy._stopping
+    asyncio.run(main())
