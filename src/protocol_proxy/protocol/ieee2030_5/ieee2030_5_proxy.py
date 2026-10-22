@@ -39,6 +39,9 @@ class Ieee2030_5Proxy(AsyncioProtocolProxy):
     DEFAULT_CALLBACK_TIMEOUT = 120.0
 
     def __init__(self, callback_timeout: float = DEFAULT_CALLBACK_TIMEOUT, **kwargs):
+        # httpcore traces every HTTP step at DEBUG (ten records per request); at the platform's DEBUG level that floods
+        # the log channel (over 200 records a second at startup). httpx's one INFO line per request is enough.
+        logging.getLogger('httpcore').setLevel(logging.INFO)
         super(Ieee2030_5Proxy, self).__init__(**kwargs)
         self.clients: dict[str, ServerClient] = {}            # servers reached, by (url, identity)
         self.servers: dict[str, ServedSep2Server] = {}        # servers served, by listener
