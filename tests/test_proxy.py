@@ -12,6 +12,9 @@ from protocol_proxy.proxy.launch import resolve_launcher
 
 from tests.conftest import POINTS
 from tests.fake_server import LFDI, PIN
+from pathlib import Path as _Path
+from protocol_proxy.manifest import Manifest as _Manifest
+_MANIFEST = _Path(__file__).parents[1] / 'src' / 'protocol_proxy' / 'protocol' / 'ieee2030_5' / 'proxy.toml'   # the identity rule lives here now
 
 
 def make_proxy() -> Ieee2030_5Proxy:
@@ -42,7 +45,7 @@ async def test_callbacks_registered_and_launch_shape():
     assert {'REGISTER_SERVER', 'READ_RESOURCES', 'WRITE_RESOURCES', 'CLOSE_SERVER', 'DESCRIBE_SERVER'} <= set(proxy.callbacks)
     assert all(len(name) <= 32 for name in proxy.callbacks)
     assert Ieee2030_5Proxy.LAUNCHER is None and Ieee2030_5Proxy.PATCH_GEVENT is False and package.PROXY_CLASS is Ieee2030_5Proxy
-    assert Ieee2030_5Proxy.get_unique_remote_id(['ieee2030_5', 'site']) == ('ieee2030_5', 'site')
+    assert _Manifest.load(_MANIFEST).process_key(['ieee2030_5', 'site'], {}) == ('ieee2030_5', 'site')
     assert resolve_launcher('protocol_proxy.protocol.ieee2030_5.ieee2030_5_proxy:Ieee2030_5Proxy') is not None
 
 

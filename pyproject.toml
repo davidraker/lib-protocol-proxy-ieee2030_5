@@ -14,6 +14,9 @@ homepage = "https://github.com/eclipse-volttron/lib-protocol-proxy-ieee2030_5"
 keywords = []
 packages = [ { include = "protocol_proxy", from = "src" } ]
 
+[tool.poetry.plugins."protocol_proxy.manifests"]
+ieee2030_5 = "protocol_proxy.protocol.ieee2030_5:proxy.toml"
+
 [tool.poetry.dependencies]
 python = ">=3.11,<4.0"
 protocol-proxy = ">=2.0.0rc3"

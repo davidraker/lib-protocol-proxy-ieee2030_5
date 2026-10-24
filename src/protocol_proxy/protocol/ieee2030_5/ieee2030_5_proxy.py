@@ -224,7 +224,3 @@ class Ieee2030_5Proxy(AsyncioProtocolProxy):
                 _log.warning(f'{self.proxy_name}: error closing {type(remote).__name__} while stopping: {e}')
         await super(Ieee2030_5Proxy, self).stop()
 
-    @classmethod
-    def get_unique_remote_id(cls, unique_remote_id: tuple) -> tuple:
-        """Identify the proxy process a caller wants; all servers share one unless the caller groups them."""
-        return tuple(unique_remote_id)

@@ -1,0 +1,10 @@
+# Manifest for the ieee2030_5 protocol proxy: what a manager needs to launch it and key its processes.
+# Read by protocol_proxy.manifest (see PROTOCOL.md, "Manifests"); nothing in it is executable.
+
+[proxy]
+name = "ieee2030_5"
+command = ["{python}", "-m", "protocol_proxy.proxy", "protocol_proxy.protocol.ieee2030_5.ieee2030_5_proxy:Ieee2030_5Proxy"]
+header_version = 2
+
+# Without [identity] keys the caller's key is the process key as given: every remote shares one process
+# unless the caller groups them.
