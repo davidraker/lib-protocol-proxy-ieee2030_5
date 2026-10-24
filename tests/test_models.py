@@ -54,7 +54,11 @@ def test_convert_paths_and_flatten():
     assert status.operationalModeStatus == sep.OperationalModeStatusType(dateTime=9, value=2)
     assert status.alarmStatus == bytes.fromhex('00000011') and status.stateOfChargeStatus.value == 55
     assert convert.flatten(status) == {'alarmStatus': '00000011', 'operationalModeStatus': 2, 'stateOfChargeStatus': 55}
-    assert convert.resolve_alias(('DERStatus', 'connectStatus')) == ('DERStatus', 'genConnectStatus')
+    # connectStatus is the 2023 element; its Connected bit is mirrored to genConnectStatus for 2018 peers.
+    convert.set_path(status, ('connectStatus',), '03', now=9)
+    assert status.connectStatus.value == b'\x03' and status.genConnectStatus.value == b'\x01'
+    assert convert.flatten(status)['connectStatus'] == '03' and convert.flatten(status)['genConnectStatus'] == '01'
+    assert convert.flatten(sep.DERStatus(genConnectStatus=sep.ConnectStatusType(dateTime=1, value=b'\x05')))['connectStatus'] == '01'
     assert convert.quantity_value(sep.ActivePower(value=12, multiplier=-2)) == pytest.approx(0.12)
     assert convert.quantity_from(sep.ActivePower, 1234.9, 1) == sep.ActivePower(multiplier=1, value=123)
     with pytest.raises(convert.ConversionError):

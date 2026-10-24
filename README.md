@@ -141,8 +141,8 @@ certificate truncated to 160 bits; the SFDI follows from it with a check digit.
 
 ## Models
 
-`models/sep.py` is the generated dataclass rendering of the IEEE 2030.5-2018 schema, vendored from the GridAPPS-D
-2030.5 server distribution (see `models/SOURCE.md` for provenance and licence). `models/xml.py` serialises and parses
+`models/sep.py` is the generated dataclass rendering of the IEEE 2030.5-2023 schema (`models/regenerate.py` runs xsdata
+on the standard's `sep.xsd` and folds the renderings that are not wire structure; see `models/SOURCE.md`). `models/xml.py` serialises and parses
 it with xsdata, leniently so vendor extensions do not break parsing; `models/convert.py` is the boundary between the
 flat convention and the schema's quantities, status structs and hex-binary types.
 

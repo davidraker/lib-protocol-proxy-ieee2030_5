@@ -830,7 +830,7 @@ def _luhn(number: int) -> int:
 def _list_field(cls) -> str:
     import dataclasses
     for f in dataclasses.fields(cls):
-        if f.name not in ('all', 'results') and convert.field_type(cls, f.name)[1]:
+        if f.name not in ('all', 'results') and convert.is_structural(f) and convert.field_type(cls, f.name)[1]:
             return f.name
     raise ValueError(f'{cls.__name__} has no list field')
 

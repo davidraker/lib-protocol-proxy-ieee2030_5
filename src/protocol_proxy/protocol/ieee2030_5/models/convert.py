@@ -4,20 +4,25 @@ In the convention a quantity such as ``DERSettings.setMaxW`` is one number in en
 ``{value, multiplier}`` pair. Status structs (``DERStatus.operationalModeStatus``) are one enumeration value in the
 convention and ``{dateTime, value}`` on the wire. Hex-binary fields are hex strings (or integers) in the convention
 and ``bytes`` on the wire. Curve points are a list of ``{xvalue, yvalue}`` dicts in both.
+
+The models follow the 2023 edition of the schema (``regenerate.py``). Its ``*_r2_3`` revision markers and ``xs:any``
+extension points are not fields of the convention and are ignored here. ``DERStatus.connectStatus`` is the 2023
+element; for peers on the 2018 edition its ``Connected`` bit is mirrored to and from ``genConnectStatus`` (the only bit
+the two bitmaps share).
 """
 from __future__ import annotations
 
 import dataclasses
+import re
 import typing
 from functools import lru_cache
 from typing import Any
 
 from . import sep
 
-#: Convention names that differ from the 2018 schema field names.
-ALIASES: dict[tuple[str, ...], tuple[str, ...]] = {
-    ('DERStatus', 'connectStatus'): ('DERStatus', 'genConnectStatus'),
-}
+#: Convention names that differ from the schema field names (none since the 2023 models; kept for callers).
+ALIASES: dict[tuple[str, ...], tuple[str, ...]] = {}
+REVISION_MARKER = re.compile(r'_r\d+_\d+$')
 #: Resources the client publishes upward (writable rows) and the ones it receives (read-only rows).
 UPWARD_RESOURCES = ('DERCapability', 'DERSettings', 'DERStatus', 'DERAvailability', 'DeviceInformation',
                     'MirrorMeterReading')
@@ -62,8 +67,19 @@ def is_dataclass_type(t) -> bool:
     return isinstance(t, type) and dataclasses.is_dataclass(t)
 
 
+def is_structural(f: dataclasses.Field) -> bool:
+    """Whether a dataclass field is part of the schema's model rather than a revision marker or an ``xs:any`` slot."""
+    return not REVISION_MARKER.search(f.name) and f.metadata.get('type') not in ('Wildcard', 'Attributes')
+
+
 def field_names(cls) -> frozenset:
-    return frozenset(f.name for f in dataclasses.fields(cls))
+    return frozenset(f.name for f in dataclasses.fields(cls) if is_structural(f))
+
+
+def element_names(cls) -> frozenset:
+    """Structural fields that are XML elements: the shape of a type without its attributes (the 2023 ``*ControlType``
+    quantities add a ``disabled`` attribute to ``{value, multiplier}``)."""
+    return frozenset(f.name for f in dataclasses.fields(cls) if is_structural(f) and f.metadata.get('type') != 'Attribute')
 
 
 #: The scaled-number types of the schema: FixedPointType and friends carry ``value``, PowerFactor ``displacement``.
@@ -71,7 +87,7 @@ QUANTITY_FIELDS = (frozenset({'multiplier', 'value'}), frozenset({'multiplier', 
 
 
 def is_quantity(t) -> bool:
-    return is_dataclass_type(t) and field_names(t) in QUANTITY_FIELDS
+    return is_dataclass_type(t) and element_names(t) in QUANTITY_FIELDS
 
 
 def quantity_field(t) -> str:
@@ -79,11 +95,12 @@ def quantity_field(t) -> str:
 
 
 def is_status_struct(t) -> bool:
-    return is_dataclass_type(t) and field_names(t) == frozenset({'dateTime', 'value'})
+    return is_dataclass_type(t) and element_names(t) == frozenset({'dateTime', 'value'})
 
 
 def is_link(t) -> bool:
-    return is_dataclass_type(t) and 'href' in field_names(t) and field_names(t) <= {'href', 'all'}
+    # Links carry href and, for list links, all; the 2023 schema adds a disabled attribute to the curve links.
+    return is_dataclass_type(t) and 'href' in field_names(t) and field_names(t) <= {'href', 'all', 'disabled'}
 
 
 def is_hex(cls, name: str) -> bool:
@@ -207,6 +224,10 @@ def set_path(obj, parts, value, *, multiplier: int = 0, now: int | None = None):
         obj, cls = child, t
     name = parts[-1]
     setattr(obj, name, scalar_to_wire(cls, name, value, multiplier=multiplier, now=now))
+    if cls is sep.DERStatus and name == 'connectStatus' and obj.connectStatus is not None and obj.genConnectStatus is None:
+        # 2018 peers read genConnectStatus; bit 0 (Connected) means the same in both bitmaps.
+        connected = int.from_bytes(obj.connectStatus.value or b'\x00', 'big') & 1
+        obj.genConnectStatus = scalar_to_wire(cls, 'genConnectStatus', {'value': connected, 'dateTime': obj.connectStatus.dateTime}, now=now)
 
 
 def get_path(obj, parts):
@@ -231,15 +252,19 @@ def validate_path(resource: str, attribute_parts: tuple[str, ...]) -> type:
 
 
 # ---- flattening ---------------------------------------------------------------------------------------------------
-def flatten(obj, prefix: str = '', *, skip=('href', 'subscribable', 'replyTo', 'responseRequired')) -> dict[str, Any]:
+def flatten(obj, prefix: str = '', *, skip=('href', 'subscribable', 'replyTo', 'responseRequired', 'schemaVer')) -> dict[str, Any]:
     """Convention view of a sep object: dotted paths to engineering values, hex strings and curve-point lists."""
     out: dict[str, Any] = {}
     if obj is None:
         return out
     cls = type(obj)
+    if cls is sep.DERStatus and obj.connectStatus is None and obj.genConnectStatus is not None:
+        # A 2018 peer's status: the Connected bit is all connectStatus can be given.
+        connected = int.from_bytes(obj.genConnectStatus.value or b'\x00', 'big') & 1
+        out[f'{prefix}.connectStatus' if prefix else 'connectStatus'] = f'{connected:02X}'
     for f in dataclasses.fields(obj):
         name = f.name
-        if name in skip:
+        if name in skip or not is_structural(f):
             continue
         value = getattr(obj, name)
         if value is None or (isinstance(value, list) and not value):

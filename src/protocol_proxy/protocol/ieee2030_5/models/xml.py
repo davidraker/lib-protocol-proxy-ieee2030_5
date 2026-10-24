@@ -19,7 +19,8 @@ SEP_XML = 'application/sep+xml'
 T = TypeVar('T')
 
 _context = XmlContext()
-# Lenient on purpose: servers add vendor elements and attributes, and the models follow the 2018 schema.
+# Lenient on purpose: servers add vendor elements and attributes, peers may speak an older or newer edition, and
+# the models (2023) fold the schema's simple-content wrappers so their anyAttribute slots are not represented.
 _parser = XmlParser(config=ParserConfig(fail_on_unknown_properties=False, fail_on_unknown_attributes=False),
                     context=_context, handler=XmlEventHandler)
 _serializer = XmlSerializer(config=SerializerConfig(xml_declaration=True, encoding='UTF-8', indent=None), context=_context)
@@ -44,10 +45,11 @@ def list_items(list_obj: Any) -> list:
     Every list type in the schema carries ``all``, ``results`` and exactly one list-valued field; this returns that
     field's value so paging code need not know each list's element name.
     """
+    from .convert import is_structural
     if list_obj is None:
         return []
     for f in fields(list_obj):
-        if f.name in ('all', 'results', 'href', 'subscribable', 'pollRate'):
+        if f.name in ('all', 'results', 'href', 'subscribable', 'pollRate') or not is_structural(f):
             continue
         value = getattr(list_obj, f.name)
         if isinstance(value, list):
