@@ -1,7 +1,8 @@
 """Regenerate ``sep.py`` from the IEEE 2030.5 ``sep.xsd`` schema.
 
-The schema comes from the standard's supplemental material (not in this repository; by default the newest edition
-found under ``der_control_modules/1547_standards/2030.5/<edition>/``). xsdata renders it to dataclasses with the
+The schema comes from the standard's supplemental material, which is IEEE copyright and not in this repository:
+obtain each edition from IEEE and point ``IEEE2030_5_SCHEMAS`` at a directory with one folder per edition named by
+year (``2013/``, ``2018/``, ``2023/``), or pass ``--schema``; the newest edition found is used. xsdata renders it to dataclasses with the
 schema's own class and field names, then this script folds three renderings of the 2023 schema that are not wire
 structure, so the module keeps the shape the proxy was written against (the 2018 rendering) plus the 2023 elements:
 
@@ -28,6 +29,7 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import os
 import re
 import subprocess
 import sys
@@ -35,7 +37,7 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-STANDARDS_DIR = Path.home() / 'Projects' / 'der_control_modules' / '1547_standards' / '2030.5'
+SCHEMAS_ENV = 'IEEE2030_5_SCHEMAS'
 REVISION_MARKER = re.compile(r'_r\d+_\d+$')
 XSDATA_CONFIG = """<?xml version="1.0" encoding="UTF-8"?>
 <Config xmlns="http://pypi.org/project/xsdata" version="25.7">
@@ -67,9 +69,10 @@ XSDATA_CONFIG = """<?xml version="1.0" encoding="UTF-8"?>
 
 def discover_schema() -> tuple[str, Path] | None:
     found = {}
-    if STANDARDS_DIR.is_dir():
-        for path in sorted(STANDARDS_DIR.glob('*/**/sep.xsd')):
-            edition = path.relative_to(STANDARDS_DIR).parts[0]
+    root = Path(os.environ[SCHEMAS_ENV]).expanduser() if os.environ.get(SCHEMAS_ENV) else None
+    if root is not None and root.is_dir():
+        for path in sorted(root.glob('*/**/sep.xsd')):
+            edition = path.relative_to(root).parts[0]
             if '__MACOSX' not in path.parts and re.fullmatch(r'20\d\d', edition):
                 found.setdefault(edition, path)
     if not found:
@@ -235,7 +238,7 @@ def main(argv: list[str] | None = None) -> None:
     if schema is None:
         found = discover_schema()
         if found is None:
-            raise SystemExit(f'No sep.xsd under {STANDARDS_DIR}; pass --schema.')
+            raise SystemExit(f'No sep.xsd found: set {SCHEMAS_ENV} (one folder per edition, named by year) or pass --schema.')
         edition, schema = found
     module = run_xsdata(schema, Path(tempfile.mkdtemp(prefix='sep_xsdata_')))
     text, stats = fold(module.read_text(encoding='utf-8'))
